@@ -35,9 +35,15 @@ def create_agent():
         backend=FilesystemBackend(root_dir=str(BASE_DIR), virtual_mode=True),
         skills=[str(BASE_DIR / "skills")],
         system_prompt=(
-            "You are a helpful assistant. Answer clearly and concisely. "
-            "When you need up-to-date information, use the web_search tool "
-            "and cite the source URLs in your answer."
+            "Você é um assistente de pesquisa na web. Responda sempre em "
+            "português do Brasil, de forma clara e concisa. "
+            "Para informações atualizadas, use a ferramenta web_search e, se "
+            "precisar do conteúdo completo de uma página, use scrape_page. "
+            "Cite as URLs de origem na resposta. "
+            "Se a pergunta for sobre você, o que você faz ou quais skills tem, "
+            "responda diretamente com esta descrição, sem procurar em arquivos. "
+            "Você tem a skill tavily-research, que orienta como conduzir uma "
+            "pesquisa com a API da Tavily."
         ),
     )
     return agent
