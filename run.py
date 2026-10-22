@@ -21,40 +21,21 @@ Usage:
 """
 
 import os
-from pathlib import Path
 
-from deepagents import create_deep_agent
-from deepagents.backends.filesystem import FilesystemBackend
-from langchain_core.tools import tool
-from langchain_openai import ChatOpenAI
-from tavily import TavilyClient
-from tools.web_search import web_search
-from tools.scrape import scrape_page
 
 from dotenv import load_dotenv
+
+import logging
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
 
 load_dotenv()  # Load environment variables from .env file
 
 
-BASE_DIR = Path(__file__).resolve().parent
-
-
-def create_agent():
-    """Create the agent with ChatOpenAI, the Tavily search tool, and the skills folder."""
-    model = ChatOpenAI(model="gpt-4o", temperature=0)
-
-    agent = create_deep_agent(
-        model=model,
-        tools=[web_search, scrape_page],
-        backend=FilesystemBackend(root_dir=str(BASE_DIR), virtual_mode=True),
-        skills=[str(BASE_DIR / "skills")],
-        system_prompt=(
-            "You are a helpful assistant. Answer clearly and concisely. "
-            "When you need up-to-date information, use the web_search tool "
-            "and cite the source URLs in your answer."
-        ),
-    )
-    return agent
+from agent import create_agent
 
 
 def chat(agent):
@@ -74,8 +55,13 @@ def chat(agent):
 
         history.append({"role": "user", "content": user_input})
 
+        start = len(history)
         response = agent.invoke({"messages": history})
         history = response["messages"]
+
+        for message in history[start:]:
+            if message.type == "tool":
+                print(f"[tool {message.name}]\n{message.content}\n")
 
         text = history[-1].content
         print(f"Agent: {text}\n")
