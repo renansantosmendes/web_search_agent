@@ -98,3 +98,85 @@ def test_the_oldest_sessions_are_dropped_when_full(client, fake_agent, monkeypat
         client.post("/chat", json={"message": "x", "session_id": name})
 
     assert list(app_module._sessions) == ["b", "c"]
+
+
+class FakeTavilyClient:
+    """Records the search arguments and returns a canned Tavily response."""
+
+    calls = []
+    error = None
+
+    def __init__(self, api_key=None):
+        self.api_key = api_key
+
+    def search(self, **kwargs):
+        if FakeTavilyClient.error:
+            raise FakeTavilyClient.error
+        FakeTavilyClient.calls.append(kwargs)
+        return {
+            "query": kwargs["query"],
+            "answer": "resposta",
+            "results": [
+                {
+                    "title": "Pagina",
+                    "url": "https://exemplo.com",
+                    "raw_content": "x" * 30000,
+                }
+            ],
+        }
+
+
+@pytest.fixture
+def fake_tavily(monkeypatch):
+    FakeTavilyClient.calls = []
+    FakeTavilyClient.error = None
+    monkeypatch.setattr(app_module, "TavilyClient", FakeTavilyClient)
+    monkeypatch.setenv("TAVILY_API_KEY", "test-key")
+    return FakeTavilyClient
+
+
+def test_search_returns_the_complete_tavily_response(client, fake_tavily):
+    response = client.get("/search", params={"query": "dolar hoje", "max_results": 3})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["answer"] == "resposta"
+    assert len(body["results"][0]["raw_content"]) == 30000
+    assert fake_tavily.calls == [
+        {
+            "query": "dolar hoje",
+            "search_depth": "advanced",
+            "max_results": 3,
+            "include_answer": True,
+            "include_raw_content": "markdown",
+        }
+    ]
+
+
+def test_search_uses_five_results_by_default(client, fake_tavily):
+    client.get("/search", params={"query": "dolar"})
+
+    assert fake_tavily.calls[0]["max_results"] == 5
+
+
+@pytest.mark.parametrize("max_results", [0, 21])
+def test_search_rejects_result_counts_outside_1_to_20(client, fake_tavily, max_results):
+    response = client.get(
+        "/search", params={"query": "dolar", "max_results": max_results}
+    )
+
+    assert response.status_code == 422
+    assert fake_tavily.calls == []
+
+
+def test_search_requires_a_query(client, fake_tavily):
+    assert client.get("/search").status_code == 422
+
+
+def test_search_failure_returns_502_without_details(client, fake_tavily):
+    fake_tavily.error = RuntimeError("tavily down")
+
+    response = client.get("/search", params={"query": "dolar"})
+
+    assert response.status_code == 502
+    assert response.json()["detail"] == "Search failed"
