@@ -7,10 +7,9 @@ skills/tavily-research/SKILL.md.
 
 import os
 
+from dotenv import load_dotenv
 from langchain_core.tools import tool
 from tavily import TavilyClient
-
-from dotenv import load_dotenv
 
 load_dotenv()  # Load environment variables from .env file
 

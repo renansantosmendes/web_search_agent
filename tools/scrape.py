@@ -42,7 +42,8 @@ def scrape_page(url: str) -> dict:
     soup = BeautifulSoup(response.text, "html.parser")
 
     # Remove tags that rarely contain the main content.
-    for tag in soup(["script", "style", "noscript", "nav", "footer", "header", "aside"]):
+    noise_tags = ["script", "style", "noscript", "nav", "footer", "header", "aside"]
+    for tag in soup(noise_tags):
         tag.decompose()
 
     title = soup.title.string.strip() if soup.title and soup.title.string else None

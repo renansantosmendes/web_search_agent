@@ -20,12 +20,11 @@ Usage:
     python agente_chat.py
 """
 
-import os
-
+import logging
 
 from dotenv import load_dotenv
 
-import logging
+from agent import create_agent
 
 logging.basicConfig(
     level=logging.INFO,
@@ -35,11 +34,8 @@ logging.basicConfig(
 load_dotenv()  # Load environment variables from .env file
 
 
-from agent import create_agent
-
-
 def chat(agent):
-    """Simple chat loop: read user input, send it to the agent, and print the response."""
+    """Read user input, send it to the agent, and print the response."""
     history = []
 
     print("Chat started. Type 'exit' to quit.\n")
