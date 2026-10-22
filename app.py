@@ -3,6 +3,7 @@
 Endpoints:
     GET  /health   liveness check
     POST /chat     send a message, get the agent's reply
+    GET  /search   run a Tavily search and return the complete response
 
 Conversations are kept by session_id. Send the session_id returned by the
 first call to continue the same conversation.
@@ -22,10 +23,33 @@ from pydantic import BaseModel, Field
 from tavily import TavilyClient
 
 from agent import create_agent
+from tools.content_cleaner import clean_markdown
 
 MAX_SESSIONS = 200  # bound on the sessions kept by one warm instance
 
-app = FastAPI(title="Web Research Agent API")
+API_DESCRIPTION = """
+Web research agent. It answers questions using web searches (Tavily) and
+page reading, and keeps the conversation by `session_id`.
+
+- **`/chat`** talks to the agent. The agent searches the web when it needs
+  current information and cites the source URLs in its answer.
+- **`/search`** runs a Tavily search directly, without the agent, and returns
+  the complete response, including the cleaned text of each page.
+
+Sessions are kept in the memory of one server instance. They are lost when
+the instance restarts or a new one starts.
+"""
+
+app = FastAPI(
+    title="Web Research Agent API",
+    description=API_DESCRIPTION,
+    version="1.0.0",
+    openapi_tags=[
+        {"name": "system", "description": "Service status."},
+        {"name": "agent", "description": "Chat with the research agent."},
+        {"name": "search", "description": "Direct Tavily web search."},
+    ],
+)
 
 _agent = None
 _sessions: dict[str, list] = {}
@@ -33,17 +57,41 @@ _lock = threading.Lock()
 
 
 class ChatRequest(BaseModel):
-    """Body of POST /chat."""
+    """Body of `POST /chat`."""
 
-    message: str = Field(min_length=1, max_length=4000)
-    session_id: Optional[str] = Field(default=None, max_length=64)
+    message: str = Field(
+        min_length=1,
+        max_length=4000,
+        description="Message to send to the agent, up to 4000 characters.",
+        examples=["What is the current USD to BRL exchange rate?"],
+    )
+    session_id: Optional[str] = Field(
+        default=None,
+        max_length=64,
+        description=(
+            "Session to continue. Leave it out to start a new conversation; "
+            "the new `session_id` is returned in the response."
+        ),
+        examples=["3f2b9c1e-6d0a-4a7e-9d3b-2c1f0e9a8b7c"],
+    )
 
 
 class ChatResponse(BaseModel):
-    """Reply of POST /chat."""
+    """Reply of `POST /chat`."""
 
-    session_id: str
-    reply: str
+    session_id: str = Field(
+        description="Session of the conversation. Send it in the next call "
+        "to continue the same conversation."
+    )
+    reply: str = Field(
+        description="Answer of the agent. It may cite the source URLs."
+    )
+
+
+class ErrorResponse(BaseModel):
+    """Error body returned by the API."""
+
+    detail: str = Field(description="Short description of the error.")
 
 
 def get_agent():
@@ -97,9 +145,16 @@ def _remember(session_id: str, messages: list) -> None:
             _sessions.pop(next(iter(_sessions)))
 
 
-@app.get("/health")
+@app.get(
+    "/health",
+    tags=["system"],
+    summary="Health check",
+    response_description="The service is running.",
+)
 def health() -> dict:
     """Report that the API is running.
+
+    Use it to check that the service is up, for example in uptime monitors.
 
     Returns
     -------
@@ -109,20 +164,22 @@ def health() -> dict:
     return {"status": "ok"}
 
 
-@app.post("/chat", response_model=ChatResponse)
+@app.post(
+    "/chat",
+    response_model=ChatResponse,
+    tags=["agent"],
+    summary="Send a message to the research agent",
+    responses={500: {"model": ErrorResponse, "description": "The agent failed."}},
+)
 def chat(request: ChatRequest) -> ChatResponse:
     """Answer a message, continuing the conversation of the given session.
 
-    Parameters
-    ----------
-    request : ChatRequest
-        The message and, optionally, the session to continue. Without a
-        session_id a new session is started.
+    The agent has the `web_search` tool (Tavily), a `scrape_page` tool that
+    reads a URL, and the skills in the `skills/` folder. It answers in
+    Brazilian Portuguese and cites the sources it used.
 
-    Returns
-    -------
-    ChatResponse
-        The session_id to use in the next call and the agent's reply.
+    To start a conversation, send only `message`. To continue it, send the
+    `session_id` returned by the previous call.
 
     Raises
     ------
@@ -144,25 +201,38 @@ def chat(request: ChatRequest) -> ChatResponse:
     return ChatResponse(session_id=session_id, reply=_text(messages[-1].content))
 
 
-@app.get("/search")
+@app.get(
+    "/search",
+    tags=["search"],
+    summary="Search the web with Tavily",
+    responses={502: {"model": ErrorResponse, "description": "Tavily failed."}},
+)
 def search(
-    query: str = Query(min_length=1, max_length=400),
-    max_results: int = Query(default=5, ge=1, le=20),
+    query: str = Query(
+        min_length=1,
+        max_length=400,
+        description="Search query, from 1 to 400 characters.",
+        examples=["exchange rate dollar real today"],
+    ),
+    max_results: int = Query(
+        default=5,
+        ge=1,
+        le=20,
+        description="Number of results to return, from 1 to 20 (Tavily's limit).",
+    ),
 ) -> dict:
     """Run a Tavily search and return the complete response.
 
-    Parameters
-    ----------
-    query : str
-        Search query, from 1 to 400 characters.
-    max_results : int
-        Number of results to return, from 1 to 20 (Tavily's limit).
+    The search is advanced and returns, in addition to the Tavily answer:
 
-    Returns
-    -------
-    dict
-        The Tavily response as is: ``answer``, ``results`` (with the full
-        ``raw_content`` of each page) and the request metadata.
+    - `answer`: short answer to the query.
+    - `results`: list of pages. Each item has `title`, `url`, `content` (the
+      Tavily excerpt), `score`, `favicon`, `raw_content` (the full page text
+      in markdown) and `cleaned_content` (the same text without images,
+      navigation links and extra blank lines).
+    - `images`: related images.
+    - `usage`: credits used by the request.
+    - `query`, `response_time` and `request_id`: request metadata.
 
     Raises
     ------
@@ -171,7 +241,7 @@ def search(
     """
     try:
         client = TavilyClient(api_key=os.environ.get("TAVILY_API_KEY"))
-        return client.search(
+        response = client.search(
             query=query,
             search_depth="advanced",
             max_results=max_results,
@@ -183,3 +253,7 @@ def search(
         )
     except Exception:
         raise HTTPException(status_code=502, detail="Search failed")
+
+    for result in response.get("results", []):
+        result["cleaned_content"] = clean_markdown(result.get("raw_content") or "")
+    return response
