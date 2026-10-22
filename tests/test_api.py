@@ -105,6 +105,7 @@ class FakeTavilyClient:
 
     calls = []
     error = None
+    raw_content_override = None
 
     def __init__(self, api_key=None):
         self.api_key = api_key
@@ -113,6 +114,7 @@ class FakeTavilyClient:
         if FakeTavilyClient.error:
             raise FakeTavilyClient.error
         FakeTavilyClient.calls.append(kwargs)
+        raw_content = FakeTavilyClient.raw_content_override or "x" * 30000
         return {
             "query": kwargs["query"],
             "answer": "resposta",
@@ -120,7 +122,7 @@ class FakeTavilyClient:
                 {
                     "title": "Pagina",
                     "url": "https://exemplo.com",
-                    "raw_content": "x" * 30000,
+                    "raw_content": raw_content,
                 }
             ],
         }
@@ -130,6 +132,7 @@ class FakeTavilyClient:
 def fake_tavily(monkeypatch):
     FakeTavilyClient.calls = []
     FakeTavilyClient.error = None
+    FakeTavilyClient.raw_content_override = None
     monkeypatch.setattr(app_module, "TavilyClient", FakeTavilyClient)
     monkeypatch.setenv("TAVILY_API_KEY", "test-key")
     return FakeTavilyClient
@@ -154,6 +157,18 @@ def test_search_returns_the_complete_tavily_response(client, fake_tavily):
             "include_usage": True,
         }
     ]
+
+
+def test_each_result_gets_a_cleaned_content_field(client, fake_tavily):
+    fake_tavily.raw_content_override = (
+        "[Economia](/economia) [![foto](/x.gif)](/y) Texto [principal](https://a.com)"
+    )
+
+    response = client.get("/search", params={"query": "dolar"})
+
+    result = response.json()["results"][0]
+    assert result["cleaned_content"] == "Texto principal"
+    assert result["raw_content"] == fake_tavily.raw_content_override
 
 
 def test_search_uses_five_results_by_default(client, fake_tavily):
