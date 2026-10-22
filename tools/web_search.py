@@ -14,6 +14,8 @@ from dotenv import load_dotenv
 
 load_dotenv()  # Load environment variables from .env file
 
+MAX_RAW_CHARS = 20000
+
 
 @tool
 def web_search(query: str, max_results: int = 5) -> dict:
@@ -36,6 +38,7 @@ def web_search(query: str, max_results: int = 5) -> dict:
         search_depth="advanced",
         max_results=max_results,
         include_answer=True,
+        include_raw_content="markdown",
     )
 
     return {
@@ -45,6 +48,7 @@ def web_search(query: str, max_results: int = 5) -> dict:
                 "title": r.get("title"),
                 "url": r.get("url"),
                 "content": r.get("content"),
+                "raw_content": (r.get("raw_content") or "")[:MAX_RAW_CHARS],
             }
             for r in response.get("results", [])
         ],

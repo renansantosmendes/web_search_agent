@@ -13,7 +13,7 @@ description: Pesquisa informações atuais na web usando a API do Tavily. Use qu
 ## Como usar
 1. Reformule a pergunta do usuário em 3 a 6 palavras-chave.
 2. Execute: `python scripts/search.py "consulta"`
-3. Leia os campos `answer` e `results` (cada um tem `title`, `url` e `content`).
+3. Leia os campos `answer` e `results` (cada um tem `title`, `url`, `content` e `raw_content`). O `raw_content` traz o texto completo da página; use-o quando precisar de detalhes que o `content` não mostra.
 4. Sintetize a resposta em suas palavras e cite as fontes com links.
 
 ## Regras

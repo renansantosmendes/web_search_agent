@@ -218,3 +218,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Large tool results written by the agent at runtime
+large_tool_results/
