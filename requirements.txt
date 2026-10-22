@@ -1,0 +1,17 @@
+deepagents==0.6.12
+langchain-core==1.4.9
+langchain-openai
+python-dotenv==1.1.1
+langfuse==4.14.1
+mcp[cli]==1.28.1
+langchain-mcp-adapters==0.3.0
+fastapi==0.139.2
+uvicorn==0.51.0
+httpx==0.28.1
+pypdf==6.18.1
+python-multipart==0.0.32
+langgraph-checkpoint-postgres==3.1.2
+psycopg[binary,pool]==3.3.4
+PyJWT[crypto]>=2.9,<3
+tavily-python==0.8.5
+beautifulsoup4
