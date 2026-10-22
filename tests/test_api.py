@@ -271,13 +271,22 @@ def test_query_with_summary_returns_502_when_tavily_fails(
     assert response.json()["detail"] == "Search failed"
 
 
-@pytest.mark.parametrize("max_results", [0, 21])
-def test_query_with_summary_rejects_result_counts_outside_1_to_20(
-    client, fake_tavily, fake_summary, max_results
-):
+def test_query_with_summary_rejects_zero_results(client, fake_tavily, fake_summary):
     response = client.get(
-        "/query_with_summary", params={"query": "dolar", "max_results": max_results}
+        "/query_with_summary", params={"query": "dolar", "max_results": 0}
     )
 
     assert response.status_code == 422
     assert fake_tavily.calls == []
+
+
+@pytest.mark.parametrize("requested, sent", [(10, 10), (15, 10), (50, 10), (3, 3)])
+def test_query_with_summary_cuts_results_to_10(
+    client, fake_tavily, fake_summary, requested, sent
+):
+    response = client.get(
+        "/query_with_summary", params={"query": "dolar", "max_results": requested}
+    )
+
+    assert response.status_code == 200
+    assert fake_tavily.calls[0]["max_results"] == sent
