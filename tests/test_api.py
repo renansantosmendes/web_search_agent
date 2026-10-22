@@ -147,8 +147,11 @@ def test_search_returns_the_complete_tavily_response(client, fake_tavily):
             "query": "dolar hoje",
             "search_depth": "advanced",
             "max_results": 3,
-            "include_answer": True,
+            "include_answer": "advanced",
             "include_raw_content": "markdown",
+            "include_images": True,
+            "include_favicon": True,
+            "include_usage": True,
         }
     ]
 

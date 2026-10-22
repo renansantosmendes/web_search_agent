@@ -175,8 +175,11 @@ def search(
             query=query,
             search_depth="advanced",
             max_results=max_results,
-            include_answer=True,
+            include_answer="advanced",
             include_raw_content="markdown",
+            include_images=True,
+            include_favicon=True,
+            include_usage=True,
         )
     except Exception:
         raise HTTPException(status_code=502, detail="Search failed")
