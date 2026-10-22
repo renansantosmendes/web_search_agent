@@ -28,6 +28,7 @@ from tools.content_cleaner import clean_markdown
 from tools.summarizer import make_summary_model, summarize
 
 MAX_SESSIONS = 200  # bound on the sessions kept by one warm instance
+MAX_SUMMARY_RESULTS = 10  # results summarized per request, to limit model cost
 
 API_DESCRIPTION = """
 Web research agent. It answers questions using web searches (Tavily) and
@@ -264,8 +265,10 @@ def query_with_summary(
     max_results: int = Query(
         default=5,
         ge=1,
-        le=20,
-        description="Number of results to return, from 1 to 20 (Tavily's limit).",
+        description=(
+            "Number of results to return. Values above 10 are cut to 10 to "
+            "limit the cost of the summaries."
+        ),
     ),
 ) -> dict:
     """Run a Tavily search and add a one-sentence summary to each result.
@@ -273,14 +276,14 @@ def query_with_summary(
     The response is the same as `/search`, and each item of `results` also has
     a `summary`: one short, direct sentence written by gpt-4o-mini from the
     `cleaned_content` of the page. The summary is `null` when the page has no
-    text.
+    text. At most 10 results are returned, even if more are requested.
 
     Raises
     ------
     HTTPException
         502 if the Tavily request or a summary fails.
     """
-    response = _run_search(query, max_results)
+    response = _run_search(query, min(max_results, MAX_SUMMARY_RESULTS))
 
     try:
         model = make_summary_model()
