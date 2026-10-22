@@ -12,12 +12,14 @@ Vercel a new instance (cold start) starts with no sessions, so for durable
 history the sessions should move to a database, as finbrain-agent does.
 """
 
+import os
 import threading
 import uuid
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field
+from tavily import TavilyClient
 
 from agent import create_agent
 
@@ -140,3 +142,41 @@ def chat(request: ChatRequest) -> ChatResponse:
     messages = response["messages"]
     _remember(session_id, messages)
     return ChatResponse(session_id=session_id, reply=_text(messages[-1].content))
+
+
+@app.get("/search")
+def search(
+    query: str = Query(min_length=1, max_length=400),
+    max_results: int = Query(default=5, ge=1, le=20),
+) -> dict:
+    """Run a Tavily search and return the complete response.
+
+    Parameters
+    ----------
+    query : str
+        Search query, from 1 to 400 characters.
+    max_results : int
+        Number of results to return, from 1 to 20 (Tavily's limit).
+
+    Returns
+    -------
+    dict
+        The Tavily response as is: ``answer``, ``results`` (with the full
+        ``raw_content`` of each page) and the request metadata.
+
+    Raises
+    ------
+    HTTPException
+        502 if the Tavily request fails.
+    """
+    try:
+        client = TavilyClient(api_key=os.environ.get("TAVILY_API_KEY"))
+        return client.search(
+            query=query,
+            search_depth="advanced",
+            max_results=max_results,
+            include_answer=True,
+            include_raw_content="markdown",
+        )
+    except Exception:
+        raise HTTPException(status_code=502, detail="Search failed")
