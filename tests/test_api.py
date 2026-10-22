@@ -198,3 +198,95 @@ def test_search_failure_returns_502_without_details(client, fake_tavily):
 
     assert response.status_code == 502
     assert response.json()["detail"] == "Search failed"
+
+
+class FakeSummaryModel:
+    """Answers every summary with a fixed sentence, or fails when asked to."""
+
+    fail = False
+
+    def invoke(self, messages):
+        if FakeSummaryModel.fail:
+            raise RuntimeError("model unavailable")
+        return FakeMessage("Resumo curto.")
+
+
+@pytest.fixture
+def fake_summary(monkeypatch):
+    FakeSummaryModel.fail = False
+    monkeypatch.setattr(app_module, "make_summary_model", lambda: FakeSummaryModel())
+    return FakeSummaryModel
+
+
+def test_query_with_summary_adds_a_summary_to_each_result(
+    client, fake_tavily, fake_summary
+):
+    response = client.get("/query_with_summary", params={"query": "dolar hoje"})
+
+    assert response.status_code == 200
+    result = response.json()["results"][0]
+    assert result["summary"] == "Resumo curto."
+    assert result["cleaned_content"] == "x" * 30000
+    assert result["raw_content"] == "x" * 30000
+
+
+def test_query_with_summary_keeps_the_fields_of_search(
+    client, fake_tavily, fake_summary
+):
+    search_body = client.get("/search", params={"query": "dolar"}).json()
+    summary_body = client.get("/query_with_summary", params={"query": "dolar"}).json()
+
+    for result in summary_body["results"]:
+        del result["summary"]
+    assert summary_body == search_body
+
+
+def test_result_without_text_gets_a_null_summary(client, fake_tavily, fake_summary):
+    fake_tavily.raw_content_override = "![so imagem](x.png)"
+
+    response = client.get("/query_with_summary", params={"query": "dolar"})
+
+    assert response.json()["results"][0]["summary"] is None
+
+
+def test_summary_failure_returns_502_without_details(
+    client, fake_tavily, fake_summary
+):
+    fake_summary.fail = True
+
+    response = client.get("/query_with_summary", params={"query": "dolar"})
+
+    assert response.status_code == 502
+    assert response.json()["detail"] == "Summary generation failed"
+
+
+def test_query_with_summary_returns_502_when_tavily_fails(
+    client, fake_tavily, fake_summary
+):
+    fake_tavily.error = RuntimeError("tavily down")
+
+    response = client.get("/query_with_summary", params={"query": "dolar"})
+
+    assert response.status_code == 502
+    assert response.json()["detail"] == "Search failed"
+
+
+def test_query_with_summary_rejects_zero_results(client, fake_tavily, fake_summary):
+    response = client.get(
+        "/query_with_summary", params={"query": "dolar", "max_results": 0}
+    )
+
+    assert response.status_code == 422
+    assert fake_tavily.calls == []
+
+
+@pytest.mark.parametrize("requested, sent", [(10, 10), (15, 10), (50, 10), (3, 3)])
+def test_query_with_summary_cuts_results_to_10(
+    client, fake_tavily, fake_summary, requested, sent
+):
+    response = client.get(
+        "/query_with_summary", params={"query": "dolar", "max_results": requested}
+    )
+
+    assert response.status_code == 200
+    assert fake_tavily.calls[0]["max_results"] == sent

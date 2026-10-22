@@ -4,6 +4,7 @@ Endpoints:
     GET  /health   liveness check
     POST /chat     send a message, get the agent's reply
     GET  /search   run a Tavily search and return the complete response
+    GET  /query_with_summary   the same, with a one-sentence summary per result
 
 Conversations are kept by session_id. Send the session_id returned by the
 first call to continue the same conversation.
@@ -24,8 +25,10 @@ from tavily import TavilyClient
 
 from agent import create_agent
 from tools.content_cleaner import clean_markdown
+from tools.summarizer import make_summary_model, summarize
 
 MAX_SESSIONS = 200  # bound on the sessions kept by one warm instance
+MAX_SUMMARY_RESULTS = 10  # results summarized per request, to limit model cost
 
 API_DESCRIPTION = """
 Web research agent. It answers questions using web searches (Tavily) and
@@ -35,6 +38,8 @@ page reading, and keeps the conversation by `session_id`.
   current information and cites the source URLs in its answer.
 - **`/search`** runs a Tavily search directly, without the agent, and returns
   the complete response, including the cleaned text of each page.
+- **`/query_with_summary`** returns the same as `/search`, plus a one-sentence
+  `summary` of each page, written by gpt-4o-mini.
 
 Sessions are kept in the memory of one server instance. They are lost when
 the instance restarts or a new one starts.
@@ -233,6 +238,76 @@ def search(
     - `images`: related images.
     - `usage`: credits used by the request.
     - `query`, `response_time` and `request_id`: request metadata.
+
+    Raises
+    ------
+    HTTPException
+        502 if the Tavily request fails.
+    """
+    return _run_search(query, max_results)
+
+
+@app.get(
+    "/query_with_summary",
+    tags=["search"],
+    summary="Search the web with Tavily and summarize each result",
+    responses={
+        502: {"model": ErrorResponse, "description": "Tavily or the model failed."}
+    },
+)
+def query_with_summary(
+    query: str = Query(
+        min_length=1,
+        max_length=400,
+        description="Search query, from 1 to 400 characters.",
+        examples=["exchange rate dollar real today"],
+    ),
+    max_results: int = Query(
+        default=5,
+        ge=1,
+        description=(
+            "Number of results to return. Values above 10 are cut to 10 to "
+            "limit the cost of the summaries."
+        ),
+    ),
+) -> dict:
+    """Run a Tavily search and add a one-sentence summary to each result.
+
+    The response is the same as `/search`, and each item of `results` also has
+    a `summary`: one short, direct sentence written by gpt-4o-mini from the
+    `cleaned_content` of the page. The summary is `null` when the page has no
+    text. At most 10 results are returned, even if more are requested.
+
+    Raises
+    ------
+    HTTPException
+        502 if the Tavily request or a summary fails.
+    """
+    response = _run_search(query, min(max_results, MAX_SUMMARY_RESULTS))
+
+    try:
+        model = make_summary_model()
+        for result in response.get("results", []):
+            result["summary"] = summarize(result["cleaned_content"], model)
+    except Exception:
+        raise HTTPException(status_code=502, detail="Summary generation failed")
+    return response
+
+
+def _run_search(query: str, max_results: int) -> dict:
+    """Call Tavily and add the cleaned text of each result.
+
+    Parameters
+    ----------
+    query : str
+        Search query.
+    max_results : int
+        Number of results to return.
+
+    Returns
+    -------
+    dict
+        The Tavily response, where each result also has ``cleaned_content``.
 
     Raises
     ------
