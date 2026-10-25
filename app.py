@@ -4,7 +4,7 @@ Endpoints:
     GET  /health   liveness check
     POST /chat     send a message, get the agent's reply
     GET  /search   run a Tavily search and return the complete response
-    GET  /query_with_summary   the same, with the news article and a one-sentence summary per result
+    GET  /query_with_summary   the same, with the article and a summary per result
 
 Every model call and every Tavily search is recorded in Langfuse when the
 LANGFUSE_* variables are set (see tools/tracing.py).
@@ -23,8 +23,8 @@ import uuid
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Query
-from pydantic import BaseModel, Field
 from langfuse import observe
+from pydantic import BaseModel, Field
 from tavily import TavilyClient
 
 from agent import create_agent

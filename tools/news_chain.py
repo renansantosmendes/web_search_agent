@@ -172,7 +172,12 @@ def build_news_chain(model: BaseChatModel) -> Runnable:
     >>> chain.invoke({"title": "Dólar", "text": page_text})  # doctest: +SKIP
     {'title': 'Dólar', 'text': '...', 'article': '...', 'summary': '...'}
     """
-    extract = EXTRACT_PROMPT | model | StrOutputParser() | RunnableLambda(normalize_article)
+    extract = (
+        EXTRACT_PROMPT
+        | model
+        | StrOutputParser()
+        | RunnableLambda(normalize_article)
+    )
     summarize = (
         RunnableLambda(lambda inputs: {"article": inputs["article"]})
         | SUMMARY_PROMPT
