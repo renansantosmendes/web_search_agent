@@ -2,6 +2,7 @@
 
 import pytest
 from fastapi.testclient import TestClient
+from langchain_core.language_models.fake_chat_models import FakeListChatModel
 
 import app as app_module
 from app import app
@@ -18,7 +19,7 @@ class FakeAgent:
     def __init__(self):
         self.calls = []
 
-    def invoke(self, inputs):
+    def invoke(self, inputs, config=None):
         messages = inputs["messages"]
         self.calls.append(len(messages))
         history = list(messages) + [FakeMessage(f"resposta {len(messages)}")]
@@ -26,7 +27,7 @@ class FakeAgent:
 
 
 class FailingAgent:
-    def invoke(self, inputs):
+    def invoke(self, inputs, config=None):
         raise RuntimeError("model unavailable")
 
 
@@ -200,22 +201,31 @@ def test_search_failure_returns_502_without_details(client, fake_tavily):
     assert response.json()["detail"] == "Search failed"
 
 
-class FakeSummaryModel:
-    """Answers every summary with a fixed sentence, or fails when asked to."""
+class FailingSummaryModel(FakeListChatModel):
+    """Chat model whose every call fails, as when the provider is down."""
 
-    fail = False
-
-    def invoke(self, messages):
-        if FakeSummaryModel.fail:
-            raise RuntimeError("model unavailable")
-        return FakeMessage("Resumo curto.")
+    def invoke(self, input, config=None, **kwargs):
+        raise RuntimeError("model unavailable")
 
 
 @pytest.fixture
 def fake_summary(monkeypatch):
-    FakeSummaryModel.fail = False
-    monkeypatch.setattr(app_module, "make_summary_model", lambda: FakeSummaryModel())
-    return FakeSummaryModel
+    responses = ["Corpo da notícia com os fatos.", "Resumo curto."]
+    monkeypatch.setattr(
+        app_module,
+        "make_summary_model",
+        lambda: FakeListChatModel(responses=responses),
+    )
+    return responses
+
+
+@pytest.fixture
+def failing_summary(monkeypatch):
+    monkeypatch.setattr(
+        app_module,
+        "make_summary_model",
+        lambda: FailingSummaryModel(responses=["unused"]),
+    )
 
 
 def test_query_with_summary_adds_a_summary_to_each_result(
@@ -238,6 +248,7 @@ def test_query_with_summary_keeps_the_fields_of_search(
 
     for result in summary_body["results"]:
         del result["summary"]
+        del result["article"]
     assert summary_body == search_body
 
 
@@ -250,10 +261,8 @@ def test_result_without_text_gets_a_null_summary(client, fake_tavily, fake_summa
 
 
 def test_summary_failure_returns_502_without_details(
-    client, fake_tavily, fake_summary
+    client, fake_tavily, failing_summary
 ):
-    fake_summary.fail = True
-
     response = client.get("/query_with_summary", params={"query": "dolar"})
 
     assert response.status_code == 502
