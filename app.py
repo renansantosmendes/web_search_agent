@@ -4,7 +4,10 @@ Endpoints:
     GET  /health   liveness check
     POST /chat     send a message, get the agent's reply
     GET  /search   run a Tavily search and return the complete response
-    GET  /query_with_summary   the same, with a one-sentence summary per result
+    GET  /query_with_summary   the same, with the news article and a one-sentence summary per result
+
+Every model call and every Tavily search is recorded in Langfuse when the
+LANGFUSE_* variables are set (see tools/tracing.py).
 
 Conversations are kept by session_id. Send the session_id returned by the
 first call to continue the same conversation.
@@ -21,11 +24,14 @@ from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field
+from langfuse import observe
 from tavily import TavilyClient
 
 from agent import create_agent
 from tools.content_cleaner import clean_markdown
-from tools.summarizer import make_summary_model, summarize
+from tools.news_chain import build_news_chain
+from tools.summarizer import make_summary_model
+from tools.tracing import flush_tracing, tracing_callbacks
 
 MAX_SESSIONS = 200  # bound on the sessions kept by one warm instance
 MAX_SUMMARY_RESULTS = 10  # results summarized per request, to limit model cost
@@ -38,8 +44,9 @@ page reading, and keeps the conversation by `session_id`.
   current information and cites the source URLs in its answer.
 - **`/search`** runs a Tavily search directly, without the agent, and returns
   the complete response, including the cleaned text of each page.
-- **`/query_with_summary`** returns the same as `/search`, plus a one-sentence
-  `summary` of each page, written by gpt-4o-mini.
+- **`/query_with_summary`** returns the same as `/search`, plus an `article`
+  (the body of the news, without menus, ads and links) and a one-sentence
+  `summary`, both produced by a LangChain chain with gpt-4o-mini.
 
 Sessions are kept in the memory of one server instance. They are lost when
 the instance restarts or a new one starts.
@@ -197,9 +204,14 @@ def chat(request: ChatRequest) -> ChatResponse:
     history.append({"role": "user", "content": request.message})
 
     try:
-        response = get_agent().invoke({"messages": history})
+        response = get_agent().invoke(
+            {"messages": history},
+            config={"callbacks": tracing_callbacks(), "run_name": "chat"},
+        )
     except Exception:
         raise HTTPException(status_code=500, detail="Agent invocation failed")
+    finally:
+        flush_tracing()
 
     messages = response["messages"]
     _remember(session_id, messages)
@@ -271,12 +283,14 @@ def query_with_summary(
         ),
     ),
 ) -> dict:
-    """Run a Tavily search and add a one-sentence summary to each result.
+    """Run a Tavily search and extract the news and a summary of each result.
 
     The response is the same as `/search`, and each item of `results` also has
-    a `summary`: one short, direct sentence written by gpt-4o-mini from the
-    `cleaned_content` of the page. The summary is `null` when the page has no
-    text. At most 10 results are returned, even if more are requested.
+    an `article`: the body of the news extracted from the page by gpt-4o-mini,
+    without menus, ads and links. The `summary` is one short, direct sentence
+    written from that article. Both are an empty string and `null` when the
+    page is not a news article or has too little text. At most 10 results are
+    returned, even if more are requested.
 
     Raises
     ------
@@ -284,14 +298,53 @@ def query_with_summary(
         502 if the Tavily request or a summary fails.
     """
     response = _run_search(query, min(max_results, MAX_SUMMARY_RESULTS))
+    chain = build_news_chain(make_summary_model())
 
     try:
-        model = make_summary_model()
         for result in response.get("results", []):
-            result["summary"] = summarize(result["cleaned_content"], model)
+            news = chain.invoke(
+                {
+                    "title": result.get("title") or "",
+                    "text": result["cleaned_content"],
+                },
+                config={"callbacks": tracing_callbacks(), "run_name": "news_summary"},
+            )
+            result["article"] = news["article"]
+            result["summary"] = news["summary"]
     except Exception:
         raise HTTPException(status_code=502, detail="Summary generation failed")
+    finally:
+        flush_tracing()
     return response
+
+
+@observe(name="tavily_search")
+def search_tavily(query: str, max_results: int) -> dict:
+    """Call the Tavily search API, recorded as a span in Langfuse.
+
+    Parameters
+    ----------
+    query : str
+        Search query.
+    max_results : int
+        Number of results to return.
+
+    Returns
+    -------
+    dict
+        The Tavily response, as returned by the API.
+    """
+    client = TavilyClient(api_key=os.environ.get("TAVILY_API_KEY"))
+    return client.search(
+        query=query,
+        search_depth="advanced",
+        max_results=max_results,
+        include_answer="advanced",
+        include_raw_content="markdown",
+        include_images=True,
+        include_favicon=True,
+        include_usage=True,
+    )
 
 
 def _run_search(query: str, max_results: int) -> dict:
@@ -315,19 +368,11 @@ def _run_search(query: str, max_results: int) -> dict:
         502 if the Tavily request fails.
     """
     try:
-        client = TavilyClient(api_key=os.environ.get("TAVILY_API_KEY"))
-        response = client.search(
-            query=query,
-            search_depth="advanced",
-            max_results=max_results,
-            include_answer="advanced",
-            include_raw_content="markdown",
-            include_images=True,
-            include_favicon=True,
-            include_usage=True,
-        )
+        response = search_tavily(query, max_results)
     except Exception:
         raise HTTPException(status_code=502, detail="Search failed")
+    finally:
+        flush_tracing()
 
     for result in response.get("results", []):
         result["cleaned_content"] = clean_markdown(result.get("raw_content") or "")
